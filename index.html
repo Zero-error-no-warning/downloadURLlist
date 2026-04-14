@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>URL List Downloader</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+
+    body {
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: #f0f2f5;
+      margin: 0;
+      padding: 24px;
+      color: #222;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      margin: 0 0 16px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      padding: 24px;
+      max-width: 720px;
+      margin: 0 auto;
+      box-shadow: 0 2px 8px rgba(0,0,0,.1);
+    }
+
+    label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+
+    textarea {
+      width: 100%;
+      height: 200px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      padding: 10px;
+      font-size: 0.9rem;
+      font-family: monospace;
+      resize: vertical;
+      outline: none;
+      transition: border-color .2s;
+    }
+
+    textarea:focus { border-color: #4a90e2; }
+
+    .options {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-top: 12px;
+      flex-wrap: wrap;
+    }
+
+    .options label {
+      font-weight: normal;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    input[type="number"] {
+      width: 70px;
+      padding: 4px 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 0.9rem;
+    }
+
+    .buttons {
+      display: flex;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    button {
+      padding: 9px 22px;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: opacity .2s;
+    }
+
+    button:disabled { opacity: .5; cursor: not-allowed; }
+
+    #startBtn  { background: #4a90e2; color: #fff; }
+    #stopBtn   { background: #e24a4a; color: #fff; }
+    #clearBtn  { background: #eee;    color: #333; }
+
+    #status {
+      margin-top: 20px;
+    }
+
+    #summary {
+      font-size: 0.9rem;
+      color: #555;
+      margin-bottom: 8px;
+    }
+
+    #log {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      max-height: 300px;
+      overflow-y: auto;
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+    }
+
+    #log li {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 7px 12px;
+      font-size: 0.85rem;
+      border-bottom: 1px solid #f0f0f0;
+      word-break: break-all;
+    }
+
+    #log li:last-child { border-bottom: none; }
+
+    .icon { flex-shrink: 0; font-size: 1rem; }
+    .url-text { flex: 1; color: #444; }
+    .tag {
+      flex-shrink: 0;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 20px;
+    }
+
+    .tag-ok      { background: #d4edda; color: #155724; }
+    .tag-err     { background: #f8d7da; color: #721c24; }
+    .tag-skip    { background: #fff3cd; color: #856404; }
+    .tag-pending { background: #d1ecf1; color: #0c5460; }
+
+    progress {
+      width: 100%;
+      height: 8px;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      accent-color: #4a90e2;
+    }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>📥 URL List Downloader</h1>
+
+  <label for="urlInput">URLリスト（1行に1つ）</label>
+  <textarea id="urlInput" placeholder="https://example.com/file1.zip&#10;https://example.com/image.png&#10;..."></textarea>
+
+  <div class="options">
+    <label>
+      ダウンロード間隔:
+      <input type="number" id="delayMs" value="800" min="0" max="10000" step="100" /> ms
+    </label>
+  </div>
+
+  <div class="buttons">
+    <button id="startBtn">▶ ダウンロード開始</button>
+    <button id="stopBtn"  disabled>⏹ 停止</button>
+    <button id="clearBtn">🗑 クリア</button>
+  </div>
+
+  <div id="status" hidden>
+    <progress id="progressBar" value="0" max="1"></progress>
+    <div id="summary"></div>
+    <ul id="log"></ul>
+  </div>
+</div>
+
+<script>
+  const urlInput   = document.getElementById('urlInput');
+  const startBtn   = document.getElementById('startBtn');
+  const stopBtn    = document.getElementById('stopBtn');
+  const clearBtn   = document.getElementById('clearBtn');
+  const statusDiv  = document.getElementById('status');
+  const progressBar= document.getElementById('progressBar');
+  const summaryDiv = document.getElementById('summary');
+  const logList    = document.getElementById('log');
+
+  let abortController = null;
+  let stopped = false;
+
+  function parseUrls(text) {
+    return text
+      .split('\n')
+      .map(l => l.trim())
+      .filter(l => l.length > 0);
+  }
+
+  function filenameFromUrl(url) {
+    try {
+      const path = new URL(url).pathname;
+      const name = path.split('/').pop();
+      return name && name.includes('.') ? decodeURIComponent(name) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function addLogItem(url, state, message) {
+    const li = document.createElement('li');
+
+    const icons = { ok: '✅', error: '❌', skip: '⚠️', pending: '⏳' };
+    const tagClass = { ok: 'tag-ok', error: 'tag-err', skip: 'tag-skip', pending: 'tag-pending' };
+    const labels = { ok: 'OK', error: 'エラー', skip: 'スキップ', pending: '処理中' };
+
+    li.innerHTML = `
+      <span class="icon">${icons[state]}</span>
+      <span class="url-text" title="${escHtml(url)}">${escHtml(url)}</span>
+      <span class="tag ${tagClass[state]}">${labels[state]}</span>
+    `;
+    if (message) {
+      const note = document.createElement('div');
+      note.style.cssText = 'font-size:.75rem;color:#888;margin-top:2px;width:100%';
+      note.textContent = message;
+      li.appendChild(note);
+    }
+    logList.appendChild(li);
+    li.scrollIntoView({ block: 'nearest' });
+    return li;
+  }
+
+  function escHtml(str) {
+    return str.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function updateLogItem(li, state, message) {
+    const icons = { ok: '✅', error: '❌', skip: '⚠️', pending: '⏳' };
+    const tagClass = { ok: 'tag-ok', error: 'tag-err', skip: 'tag-skip', pending: 'tag-pending' };
+    const labels = { ok: 'OK', error: 'エラー', skip: 'スキップ', pending: '処理中' };
+    li.querySelector('.icon').textContent = icons[state];
+    const tag = li.querySelector('.tag');
+    tag.className = `tag ${tagClass[state]}`;
+    tag.textContent = labels[state];
+    if (message) {
+      let note = li.querySelector('.note');
+      if (!note) {
+        note = document.createElement('div');
+        note.className = 'note';
+        note.style.cssText = 'font-size:.75rem;color:#888;margin-top:2px;width:100%';
+        li.appendChild(note);
+      }
+      note.textContent = message;
+    }
+  }
+
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  async function downloadUrl(url, signal) {
+    const filename = filenameFromUrl(url) || 'download';
+
+    // Attempt fetch with CORS
+    const response = await fetch(url, { signal, mode: 'cors' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 5000);
+  }
+
+  startBtn.addEventListener('click', async () => {
+    const urls = parseUrls(urlInput.value);
+    if (urls.length === 0) {
+      alert('URLを入力してください。');
+      return;
+    }
+
+    // Reset UI
+    logList.innerHTML = '';
+    statusDiv.hidden = false;
+    progressBar.max = urls.length;
+    progressBar.value = 0;
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    stopped = false;
+
+    abortController = new AbortController();
+    const { signal } = abortController;
+    const delayMs = Math.max(0, parseInt(document.getElementById('delayMs').value, 10) || 0);
+
+    let ok = 0, errors = 0;
+
+    for (let i = 0; i < urls.length; i++) {
+      if (stopped) break;
+
+      const url = urls[i];
+      const li = addLogItem(url, 'pending');
+      summaryDiv.textContent = `処理中: ${i + 1} / ${urls.length}`;
+
+      try {
+        await downloadUrl(url, signal);
+        updateLogItem(li, 'ok');
+        ok++;
+      } catch (err) {
+        if (err.name === 'AbortError' || stopped) {
+          updateLogItem(li, 'skip', '停止しました');
+          break;
+        }
+        updateLogItem(li, 'error', err.message);
+        errors++;
+      }
+
+      progressBar.value = i + 1;
+
+      if (i < urls.length - 1 && !stopped && delayMs > 0) {
+        await sleep(delayMs);
+      }
+    }
+
+    const skipped = urls.length - ok - errors - (stopped ? 1 : 0);
+    summaryDiv.textContent = `完了: ${ok} 件成功 / ${errors} 件エラー${stopped ? ' / 停止' : ''}`;
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+  });
+
+  stopBtn.addEventListener('click', () => {
+    stopped = true;
+    if (abortController) abortController.abort();
+    stopBtn.disabled = true;
+  });
+
+  clearBtn.addEventListener('click', () => {
+    urlInput.value = '';
+    logList.innerHTML = '';
+    statusDiv.hidden = true;
+    progressBar.value = 0;
+    summaryDiv.textContent = '';
+  });
+</script>
+</body>
+</html>
