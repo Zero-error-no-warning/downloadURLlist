@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-downloadURLlist — download files from a URL list file.
+download — download files from a URL list file.
 
 Usage:
     python download.py urls.txt
