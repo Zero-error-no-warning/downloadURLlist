@@ -259,8 +259,8 @@
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  async function downloadUrl(url, signal) {
-    const filename = filenameFromUrl(url) || 'download';
+  async function downloadUrl(url, signal, index) {
+    const filename = filenameFromUrl(url) || `download_${index + 1}`;
 
     // Attempt fetch with CORS
     const response = await fetch(url, { signal, mode: 'cors' });
@@ -307,7 +307,7 @@
       summaryDiv.textContent = `処理中: ${i + 1} / ${urls.length}`;
 
       try {
-        await downloadUrl(url, signal);
+        await downloadUrl(url, signal, i);
         updateLogItem(li, 'ok');
         ok++;
       } catch (err) {
@@ -326,7 +326,6 @@
       }
     }
 
-    const skipped = urls.length - ok - errors - (stopped ? 1 : 0);
     summaryDiv.textContent = `完了: ${ok} 件成功 / ${errors} 件エラー${stopped ? ' / 停止' : ''}`;
     startBtn.disabled = false;
     stopBtn.disabled = true;
